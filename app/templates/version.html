@@ -35,6 +35,15 @@
     <a href="/notice/{{ record.announcement_number|urlencode }}/version/{{ record.revision }}/attachment">
       下载本版附件</a>
   </p>
+  <p>
+    <a href="/notice/{{ record.announcement_number|urlencode }}/version/{{ record.revision }}/manifest">
+      查看附件核验目录</a>
+    <span class="meta">（未核验时可在该页发起核验；仅支持 ZIP）</span>
+  </p>
+  <form method="post"
+        action="/notice/{{ record.announcement_number|urlencode }}/version/{{ record.revision }}/verify">
+    <button type="submit">核验 ZIP 附件并生成文件目录</button>
+  </form>
 </div>
 
 <h2>同公告其他版本</h2>

@@ -55,6 +55,38 @@ class ArchiveStorageError(ArchiveError):
     pass
 
 
+class ManifestError(ArchiveError):
+    """Base class for ZIP verification / manifest failures."""
+
+
+class NotZipAttachment(ManifestError):
+    pass
+
+
+class UnsafeZipEntry(ManifestError):
+    pass
+
+
+class EncryptedZipEntry(ManifestError):
+    pass
+
+
+class CorruptZip(ManifestError):
+    pass
+
+
+class ZipLimitExceeded(ManifestError):
+    pass
+
+
+class AttachmentFingerprintMismatch(ManifestError):
+    pass
+
+
+class ManifestNotFound(ManifestError):
+    pass
+
+
 def normalize_number(value: str) -> str:
     number = (value or "").strip()
     if not number or not NUMBER_RE.fullmatch(number):
@@ -179,6 +211,47 @@ class SourceSnapshot:
             attachment_filename=self.attachment.filename,
             attachment_content_type=self.attachment.content_type,
             attachment_sha256=self.attachment.sha256,
+        )
+
+
+@dataclass(frozen=True)
+class ManifestEntry:
+    path: str
+    size: int
+    sha256: str
+
+
+@dataclass(frozen=True)
+class ManifestResult:
+    number: str
+    revision: int
+    attachment_sha256: str
+    attachment_size: int
+    entry_count: int
+    total_uncompressed: int
+    manifest_sha256: str
+    entries: list[ManifestEntry] = field(default_factory=list)
+    verified_at: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "announcement_number": self.number,
+                "revision": self.revision,
+                "attachment_sha256": self.attachment_sha256,
+                "attachment_size": self.attachment_size,
+                "entry_count": self.entry_count,
+                "total_uncompressed": self.total_uncompressed,
+                "manifest_sha256": self.manifest_sha256,
+                "verified_at": self.verified_at,
+                "entries": [
+                    {"path": e.path, "size": e.size, "sha256": e.sha256}
+                    for e in self.entries
+                ],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
         )
 
 

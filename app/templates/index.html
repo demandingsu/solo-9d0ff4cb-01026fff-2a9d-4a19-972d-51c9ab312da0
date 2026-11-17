@@ -59,6 +59,8 @@
       <td>
         {% if e.outcome == "created" %}<span class="pill current">新建版本</span>
         {% elif e.outcome == "unchanged" %}<span class="pill">无变化</span>
+        {% elif e.outcome in ("manifest_created", "manifest_reused") %}
+          <span class="pill current">{{ e.outcome }}</span>
         {% elif e.outcome in ("conflict","revision_mismatch","source_inconsistent") %}
           <span class="pill conflict">{{ e.outcome }}</span>
         {% elif e.outcome in ("not_found","withdrawn","source_unavailable") %}

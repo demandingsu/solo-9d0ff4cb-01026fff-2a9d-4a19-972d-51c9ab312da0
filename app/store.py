@@ -15,6 +15,7 @@ from typing import Iterable
 
 from .domain import (
     ArchiveStorageError,
+    ManifestResult,
     VersionRecord,
     utc_now_iso,
 )
@@ -63,6 +64,34 @@ CREATE TABLE IF NOT EXISTS capture_log (
     detail          TEXT NOT NULL,
     created_at      TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS zip_manifests (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    announcement_number TEXT NOT NULL,
+    revision            INTEGER NOT NULL,
+    attachment_sha256   TEXT NOT NULL,
+    attachment_size     INTEGER NOT NULL,
+    entry_count         INTEGER NOT NULL,
+    total_uncompressed  INTEGER NOT NULL,
+    manifest_sha256      TEXT NOT NULL,
+    verified_at         TEXT NOT NULL,
+    UNIQUE (announcement_number, revision),
+    FOREIGN KEY (announcement_number, revision)
+        REFERENCES versions (announcement_number, revision)
+);
+
+CREATE TABLE IF NOT EXISTS zip_manifest_entries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    manifest_id INTEGER NOT NULL REFERENCES zip_manifests(id),
+    entry_index INTEGER NOT NULL,
+    path        TEXT NOT NULL,
+    size        INTEGER NOT NULL,
+    sha256      TEXT NOT NULL,
+    UNIQUE (manifest_id, entry_index)
+);
+
+CREATE INDEX IF NOT EXISTS zip_manifest_entries_manifest
+    ON zip_manifest_entries (manifest_id, entry_index);
 """
 
 
@@ -408,6 +437,140 @@ class ArchiveStore:
             raise ArchiveStorageError(f"无法记录采集事件：{exc}") from exc
         finally:
             conn.close()
+
+    # ------------------------------------------------- ZIP manifest storage
+
+    def get_manifest(self, number: str, revision: int) -> ManifestResult | None:
+        conn = self._connect()
+        try:
+            header = conn.execute(
+                "SELECT * FROM zip_manifests WHERE announcement_number = ? "
+                "AND revision = ?",
+                (number, revision),
+            ).fetchone()
+            if header is None:
+                return None
+            rows = conn.execute(
+                "SELECT path, size, sha256 FROM zip_manifest_entries "
+                "WHERE manifest_id = ? ORDER BY entry_index",
+                (header["id"],),
+            ).fetchall()
+        finally:
+            conn.close()
+        from .domain import ManifestEntry
+
+        return ManifestResult(
+            number=header["announcement_number"],
+            revision=header["revision"],
+            attachment_sha256=header["attachment_sha256"],
+            attachment_size=header["attachment_size"],
+            entry_count=header["entry_count"],
+            total_uncompressed=header["total_uncompressed"],
+            manifest_sha256=header["manifest_sha256"],
+            entries=[
+                ManifestEntry(
+                    path=row["path"], size=row["size"], sha256=row["sha256"]
+                )
+                for row in rows
+            ],
+            verified_at=header["verified_at"],
+        )
+
+    def list_manifest_refs(self, number: str) -> dict[int, dict]:
+        """Map revision -> manifest summary for the announcement page."""
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT revision, attachment_sha256, entry_count, "
+                "total_uncompressed, manifest_sha256, verified_at "
+                "FROM zip_manifests WHERE announcement_number = ?",
+                (number,),
+            ).fetchall()
+        finally:
+            conn.close()
+        return {row["revision"]: dict(row) for row in rows}
+
+    def insert_manifest(self, result: ManifestResult) -> ManifestResult:
+        """Atomically store one manifest and all its entry rows.
+
+        The UNIQUE(announcement_number, revision) constraint plus an explicit
+        pre-insert check inside ``BEGIN IMMEDIATE`` makes repeated or
+        concurrent verification idempotent: only one directory is ever kept.
+        Raises sqlite3.IntegrityError when another writer won the race.
+        """
+        conn = self._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            existing = conn.execute(
+                "SELECT 1 FROM zip_manifests WHERE announcement_number = ? "
+                "AND revision = ?",
+                (result.number, result.revision),
+            ).fetchone()
+            if existing:
+                conn.execute("ROLLBACK")
+                raise sqlite3.IntegrityError(
+                    f"r{result.revision} 的目录已存在"
+                )
+
+            version = conn.execute(
+                "SELECT 1 FROM versions WHERE announcement_number = ? "
+                "AND revision = ?",
+                (result.number, result.revision),
+            ).fetchone()
+            if version is None:
+                conn.execute("ROLLBACK")
+                raise ArchiveStorageError("目标版本不存在，无法保存目录。")
+
+            cursor = conn.execute(
+                """
+                INSERT INTO zip_manifests (
+                    announcement_number, revision, attachment_sha256,
+                    attachment_size, entry_count, total_uncompressed,
+                    manifest_sha256, verified_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.number,
+                    result.revision,
+                    result.attachment_sha256,
+                    result.attachment_size,
+                    result.entry_count,
+                    result.total_uncompressed,
+                    result.manifest_sha256,
+                    result.verified_at,
+                ),
+            )
+            manifest_id = cursor.lastrowid
+            conn.executemany(
+                """
+                INSERT INTO zip_manifest_entries
+                    (manifest_id, entry_index, path, size, sha256)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        manifest_id,
+                        index,
+                        entry.path,
+                        entry.size,
+                        entry.sha256,
+                    )
+                    for index, entry in enumerate(result.entries)
+                ],
+            )
+            conn.execute("COMMIT")
+        except sqlite3.Error:
+            try:
+                conn.execute("ROLLBACK")
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            conn.close()
+
+        stored = self.get_manifest(result.number, result.revision)
+        assert stored is not None
+        return stored
 
     @staticmethod
     def _row_to_record(row: sqlite3.Row) -> VersionRecord:

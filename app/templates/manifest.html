@@ -1,0 +1,105 @@
+{% extends "base.html" %}
+{% block title %}{{ number }} r{{ record.revision }} 附件目录 · 公告档案{% endblock %}
+{% block content %}
+<p class="meta"><a href="/notice/{{ number|urlencode }}">← 返回公告 {{ number }}</a></p>
+<h1>附件核验目录 · r{{ record.revision }}</h1>
+<p class="meta">
+  采集于 {{ record.captured_at|ts }} · 附件 {{ record.attachment_filename }}
+  · {{ record.attachment_size|bytes }}
+</p>
+
+{% if error %}
+<div class="banner err">
+  {{ error }}
+  <form method="post" action="/notice/{{ number|urlencode }}/version/{{ record.revision }}/verify"
+        style="display:inline; margin-left:8px">
+    <button type="submit" class="small">重新核验附件</button>
+  </form>
+</div>
+{% endif %}
+
+{% if manifest %}
+<div class="banner">
+  核验通过：共 {{ manifest.entry_count }} 个文件条目，解压总量
+  {{ manifest.total_uncompressed|bytes }}。目录绑定公告号、修订号与原附件 SHA-256，
+  可随时重开核对；同版重复或并发核验只保留这一份。
+</div>
+
+<div class="card">
+  <h2 style="margin-top:0">绑定信息</h2>
+  <dl class="kv">
+    <dt>公告号</dt><dd>{{ number }}</dd>
+    <dt>站点修订号</dt><dd>r{{ record.revision }}</dd>
+    <dt>核验时间</dt><dd>{{ manifest.verified_at|ts }}</dd>
+    <dt>原附件大小</dt><dd>{{ manifest.attachment_size|bytes }}</dd>
+    <dt>原附件 SHA-256</dt><dd><code>{{ manifest.attachment_sha256 }}</code></dd>
+    <dt>解压总量</dt><dd>{{ manifest.total_uncompressed|bytes }}</dd>
+    <dt>目录指纹 SHA-256</dt><dd><code>{{ manifest.manifest_sha256 }}</code></dd>
+  </dl>
+  <p class="meta">
+    路径规则：反斜杠统一折叠为 <code>/</code>，去除前导 <code>./</code>；
+    绝对路径、<code>..</code>、规范化重名、加密或损坏条目一律整包拒绝。
+  </p>
+</div>
+
+<h2>条目目录（{{ manifest.entry_count }}）</h2>
+{% if manifest.entries %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead>
+    <tr><th>#</th><th>规范化路径</th><th>解压大小</th><th>条目 SHA-256</th></tr>
+  </thead>
+  <tbody>
+  {% for e in manifest.entries %}
+    <tr>
+      <td class="meta">{{ loop.index }}</td>
+      <td><code>{{ e.path }}</code></td>
+      <td class="meta">{{ e.size|bytes }}（{{ e.size }} 字节）</td>
+      <td><code>{{ e.sha256 }}</code></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% else %}
+<p class="empty">该 ZIP 不含文件条目（空压缩包），目录为空但核验通过。</p>
+{% endif %}
+
+<p>
+  <a href="/notice/{{ number|urlencode }}/version/{{ record.revision }}/attachment">
+    下载本版原附件
+  </a>
+</p>
+{% else %}
+<div class="card">
+  <h2 style="margin-top:0">尚无通过核验的目录</h2>
+  <p class="meta">
+    仅 ZIP 附件支持核验；非 ZIP 附件会提示不支持。核验失败不会产生部分目录，
+    也不会改动已存档版本与原附件。
+  </p>
+  <form method="post" action="/notice/{{ number|urlencode }}/version/{{ record.revision }}/verify">
+    <button type="submit">核验附件并生成目录</button>
+  </form>
+</div>
+{% endif %}
+
+<h2>同公告其他版本</h2>
+{% if versions|length > 1 %}
+<div class="card" style="padding:4px 10px">
+<table>
+  <thead><tr><th>修订</th><th>采集时间</th><th>附件</th><th>目录</th></tr></thead>
+  <tbody>
+  {% for v in versions %}
+    <tr>
+      <td>{% if v.revision == record.revision %}<strong>r{{ v.revision }}</strong>
+          {% else %}<a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}">r{{ v.revision }}</a>{% endif %}</td>
+      <td class="meta">{{ v.captured_at|ts }}</td>
+      <td><a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}/attachment">下载</a></td>
+      <td><a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}/manifest">查看目录</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endif %}
+{% endblock %}

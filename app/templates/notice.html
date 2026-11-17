@@ -48,7 +48,7 @@
 <div class="card" style="padding:4px 10px">
 <table>
   <thead>
-    <tr><th>修订</th><th>采集时间</th><th>标题</th><th>附件</th><th>状态</th><th></th></tr>
+    <tr><th>修订</th><th>采集时间</th><th>标题</th><th>附件</th><th>核验目录</th><th>状态</th><th></th></tr>
   </thead>
   <tbody>
   {% for v in versions %}
@@ -58,6 +58,16 @@
       <td class="meta">{{ v.captured_at|ts }}</td>
       <td>{{ v.title }}</td>
       <td class="meta">{{ v.attachment_filename }} · {{ v.attachment_size|bytes }}</td>
+      <td>
+        {% set m = manifests.get(v.revision) if manifests else none %}
+        {% if m %}
+          <a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}/manifest">
+            已核验 · {{ m.entry_count }} 项
+          </a>
+        {% else %}
+          <span class="meta">未核验</span>
+        {% endif %}
+      </td>
       <td>{% if v.source_retracted %}<span class="pill retracted">采时源站已撤稿</span>
           {% else %}<span class="pill">已存档</span>{% endif %}</td>
       <td><a href="/notice/{{ number|urlencode }}/version/{{ v.revision }}">查看</a></td>
@@ -80,6 +90,8 @@
       <td>
         {% if e.outcome == "created" %}<span class="pill current">新建版本</span>
         {% elif e.outcome == "unchanged" %}<span class="pill">无变化</span>
+        {% elif e.outcome == "manifest_created" %}<span class="pill current">目录已生成</span>
+        {% elif e.outcome == "manifest_reused" %}<span class="pill">目录重开</span>
         {% elif e.outcome in ("conflict","revision_mismatch","source_inconsistent") %}
           <span class="pill conflict">{{ e.outcome }}</span>
         {% else %}<span class="pill retracted">{{ e.outcome }}</span>{% endif %}
@@ -101,5 +113,16 @@
     <button type="submit">重新采集 / 核对源站</button>
     <span class="meta">若源站已在同号修订下改稿，将报告冲突且不覆盖旧版。</span>
   </form>
+</div>
+
+<div class="card">
+  <form method="post" action="/notice/{{ number|urlencode }}/version/{{ latest.revision }}/verify"
+        class="inline-form">
+    <button type="submit">核验 r{{ latest.revision }} 的 ZIP 附件并生成文件目录</button>
+    <span class="meta">先复核原附件 SHA-256，再逐项读取 ZIP；非 ZIP、危险路径、加密、损坏或超限均拒绝，不产生部分目录。</span>
+  </form>
+  <p class="meta" style="margin-bottom:0">
+    <a href="/notice/{{ number|urlencode }}/version/{{ latest.revision }}/manifest">打开 r{{ latest.revision }} 核验目录</a>
+  </p>
 </div>
 {% endblock %}

@@ -14,12 +14,14 @@ from .capture import CaptureService
 from .domain import (
     ArchiveStorageError,
     InvalidNumber,
+    ManifestError,
     SourceError,
     format_bytes,
     format_timestamp,
 )
 from .source import HttpSourceClient
 from .store import ArchiveStore
+from .verifier import ManifestService
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -43,6 +45,7 @@ def create_app(
         client=source_client,
     )
     service = CaptureService(store, source)
+    manifest_service = ManifestService(store)
     templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
     templates.env.filters["bytes"] = format_bytes
     templates.env.filters["ts"] = format_timestamp
@@ -61,6 +64,7 @@ def create_app(
     app.state.store = store
     app.state.source = source
     app.state.service = service
+    app.state.manifest_service = manifest_service
 
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
@@ -111,6 +115,7 @@ def create_app(
                 "events": store.events_for(number),
                 "error": request.query_params.get("error"),
                 "announcement": store.get_announcement(number),
+                "manifests": store.list_manifest_refs(number),
             },
         )
 
@@ -146,6 +151,59 @@ def create_app(
                 ),
                 "X-Content-SHA256": record.attachment_sha256,
                 "Cache-Control": "private, max-age=0, must-revalidate",
+            },
+        )
+
+    @app.post("/notice/{number}/version/{revision}/verify")
+    def verify_attachment(number: str, revision: int):
+        try:
+            manifest_service.verify(number, revision)
+        except ManifestError as exc:
+            return _error_redirect(
+                number, f"附件核验未通过（r{revision}）：{exc.message}"
+            )
+        return RedirectResponse(
+            f"/notice/{quote(number, safe='')}/version/{revision}/manifest",
+            status_code=303,
+        )
+
+    @app.get(
+        "/notice/{number}/version/{revision}/manifest",
+        response_class=HTMLResponse,
+    )
+    def manifest_page(request: Request, number: str, revision: int):
+        record = store.get_version(number, revision)
+        if record is None:
+            return templates.TemplateResponse(
+                request,
+                "not_found.html",
+                {"number": number, "error": "该版本不存在"},
+                status_code=404,
+            )
+        try:
+            manifest = manifest_service.open_manifest(number, revision)
+        except ManifestError as exc:
+            return templates.TemplateResponse(
+                request,
+                "manifest.html",
+                {
+                    "number": number,
+                    "record": record,
+                    "manifest": None,
+                    "error": exc.message,
+                    "versions": store.list_versions(number),
+                },
+                status_code=409 if "失效" in exc.message else 404,
+            )
+        return templates.TemplateResponse(
+            request,
+            "manifest.html",
+            {
+                "number": number,
+                "record": record,
+                "manifest": manifest,
+                "error": request.query_params.get("error"),
+                "versions": store.list_versions(number),
             },
         )
 
